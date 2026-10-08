@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Seed-Welt</title>
+<style>
+:root{--bg:#e8edf1;--fg:#16202a;--card:#fff;--bd:#c5d0d9;--ac:#3f8f35;--acfg:#fff;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#11161b;--fg:#e6edf3;--card:#1b232b;--bd:#33414d;--ac:#6cc25a;--acfg:#0d1a0a}}
+:root[data-theme="dark"]{--bg:#11161b;--fg:#e6edf3;--card:#1b232b;--bd:#33414d;--ac:#6cc25a;--acfg:#0d1a0a}
+html{height:100%;scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;display:flex;flex-direction:column}
+.bar{display:flex;gap:8px;padding:10px 12px 4px}
+.bar input{flex:1;min-width:0;font:inherit;padding:9px 10px;border:1px solid var(--bd);border-radius:6px;background:var(--card);color:var(--fg)}
+.bar button{font:inherit;font-weight:600;padding:9px 12px;border:1px solid var(--bd);border-radius:6px;background:var(--card);color:var(--fg)}
+.bar button.go{background:var(--ac);color:var(--acfg);border-color:var(--ac)}
+.bar input:focus-visible,.bar button:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+.info{padding:0 12px 8px;font-size:13px;opacity:.8;overflow-wrap:anywhere}
+canvas{touch-action:none;cursor:grab;flex:1;min-height:0;width:100%;display:block}
+</style>
+</head>
+<body>
+<div class="bar">
+  <input id="seed" value="1" aria-label="Seed" autocomplete="off" spellcheck="false">
+  <button class="go" id="go">Laden</button>
+  <button id="rnd">Zufall</button>
+  <button id="auto">Stopp</button>
+</div>
+<div class="info" id="eff"></div>
+<canvas id="c"></canvas>
+<script>
+const $=id=>document.getElementById(id), cv=$('c'), ctx=cv.getContext('2d');
+let S=0, cache=new Map();
+function setSeed(txt){
+  txt=txt.trim(); let v;
+  if(/^-?\d+$/.test(txt)) v=BigInt(txt);
+  else { let h=0; for(const ch of txt) h=(Math.imul(31,h)+ch.charCodeAt(0))|0; v=BigInt(h); }
+  v=BigInt.asIntN(64,v);
+  const lo=Number(BigInt.asUintN(32,v)), hi=Number(BigInt.asUintN(32,v>>32n));
+  S=(lo^Math.imul(hi,0x9E3779B1))|0;
+  cache=new Map();
+  $('eff').textContent='Effektiver Seed (long): '+v+' – wische übers Bild, um dich umzuschauen.';
+}
+function H(x,z,o){
+  let h=S^Math.imul(x,374761393)^Math.imul(z,668265263)^Math.imul(o,1274126177);
+  h=Math.imul(h^(h>>>13),1274126177); h^=h>>>16; return h>>>0;
+}
+function g(x,z,o,dx,dz){const a=H(x,z,o)/4294967296*6.2832;return Math.cos(a)*dx+Math.sin(a)*dz}
+const fade=t=>t*t*t*(t*(t*6-15)+10);
+function noise(x,z,o){
+  const x0=Math.floor(x),z0=Math.floor(z),fx=x-x0,fz=z-z0,u=fade(fx),v=fade(fz);
+  const a=g(x0,z0,o,fx,fz),b=g(x0+1,z0,o,fx-1,fz),c=g(x0,z0+1,o,fx,fz-1),d=g(x0+1,z0+1,o,fx-1,fz-1);
+  const t=a+(b-a)*u; return t+((c+(d-c)*u)-t)*v;
+}
+function height(x,z){
+  const k=x*65536+z; let r=cache.get(k); if(r!==undefined) return r;
+  let n=0,a=1,f=1/26,s=0;
+  for(let o=0;o<4;o++){n+=noise(x*f,z*f,o)*a;s+=a;a*=.5;f*=2}
+  r=Math.max(0,Math.round(7+n/s*17));
+  if(cache.size>40000) cache=new Map();
+  cache.set(k,r); return r;
+}
+const SEA=6, R=20, N=2*R+1;
+function color(h,x,z){
+  let c; if(h<=SEA) c=[46,108,198]; else if(h===SEA+1) c=[221,203,138];
+  else if(h<=SEA+5) c=[84,158,60]; else if(h<=SEA+8) c=[122,122,128]; else c=[244,246,250];
+  const t=((H(x,z,9)&7)-3)*2; return [c[0]+t,c[1]+t,c[2]+t];
+}
+const rgb=(c,k)=>`rgb(${c[0]*k|0},${c[1]*k|0},${c[2]*k|0})`;
+const hh=new Int16Array(N*N);
+let cx=0,cz=0,vx=0,vz=0,auto=true,drag=false,px=0,py=0,last=0,TW=40;
+function frame(t){
+  const dpr=window.devicePixelRatio||1, W=cv.clientWidth, Ht=cv.clientHeight;
+  if(cv.width!==(W*dpr|0)||cv.height!==(Ht*dpr|0)){cv.width=W*dpr;cv.height=Ht*dpr}
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  const sky=ctx.createLinearGradient(0,0,0,Ht); sky.addColorStop(0,'#6fb1ee'); sky.addColorStop(1,'#d3e9fa');
+  ctx.fillStyle=sky; ctx.fillRect(0,0,W,Ht);
+  const tw=Math.max(26,Math.max(W,Ht*.7)/11), th=tw/2, bh=tw/2.4, base=Ht*.55;
+  TW=tw; const dt=Math.min(50,t-last); last=t;
+  if(auto){cx+=dt*0.0011;cz+=dt*0.0007}else if(!drag){cx+=vx*dt;cz+=vz*dt;vx*=.95;vz*=.95}
+  const x0=Math.floor(cx), z0=Math.floor(cz), fx=cx-x0, fz=cz-z0;
+  for(let i=0;i<N;i++) for(let j=0;j<N;j++) hh[i*N+j]=Math.max(height(x0+i-R,z0+j-R),SEA);
+  for(let i=0;i<N;i++){
+    for(let j=0;j<N;j++){
+      const dx=i-R-fx, dz=j-R-fz, sx=W/2+(dx-dz)*tw/2;
+      if(sx<-tw||sx>W+tw) continue;
+      const h=hh[i*N+j], sy=base+(dx+dz)*th/2, ty=sy-h*bh;
+      if(ty>Ht+bh*4) continue;
+      const c=color(h,x0+i-R,z0+j-R), hr=i<N-1?hh[(i+1)*N+j]:h-1, hl=j<N-1?hh[i*N+j+1]:h-1;
+      const dR=(h-hr)*bh, dL=(h-hl)*bh;
+      if(dR>0){ctx.fillStyle=rgb(c,.72);ctx.beginPath();ctx.moveTo(sx+tw/2,ty+th/2);ctx.lineTo(sx,ty+th);ctx.lineTo(sx,ty+th+dR);ctx.lineTo(sx+tw/2,ty+th/2+dR);ctx.fill()}
+      if(dL>0){ctx.fillStyle=rgb(c,.55);ctx.beginPath();ctx.moveTo(sx-tw/2,ty+th/2);ctx.lineTo(sx,ty+th);ctx.lineTo(sx,ty+th+dL);ctx.lineTo(sx-tw/2,ty+th/2+dL);ctx.fill()}
+      ctx.fillStyle=rgb(c,1);ctx.beginPath();ctx.moveTo(sx,ty);ctx.lineTo(sx+tw/2,ty+th/2);ctx.lineTo(sx,ty+th);ctx.lineTo(sx-tw/2,ty+th/2);ctx.closePath();ctx.fill();
+      ctx.strokeStyle='rgba(0,0,0,.14)';ctx.stroke();
+    }
+  }
+  requestAnimationFrame(frame);
+}
+const setAuto=a=>{auto=a;vx=vz=0;$('auto').textContent=a?'Stopp':'Auto-Flug'};
+cv.addEventListener('pointerdown',e=>{drag=true;setAuto(false);px=e.clientX;py=e.clientY;cv.setPointerCapture(e.pointerId);cv.style.cursor='grabbing'});
+cv.addEventListener('pointermove',e=>{
+  if(!drag) return;
+  const ax=(e.clientX-px)/(TW/2), ay=(e.clientY-py)/(TW/4); px=e.clientX; py=e.clientY;
+  const dcx=-(ax+ay)/2, dcz=-(ay-ax)/2; cx+=dcx; cz+=dcz; vx=dcx/16; vz=dcz/16;
+});
+const endDrag=()=>{drag=false;cv.style.cursor='grab'};
+cv.addEventListener('pointerup',endDrag); cv.addEventListener('pointercancel',endDrag);
+$('auto').onclick=()=>setAuto(!auto);
+const load=()=>setSeed($('seed').value);
+$('go').onclick=load;
+$('seed').addEventListener('keydown',e=>{if(e.key==='Enter')load()});
+$('rnd').onclick=()=>{
+  const r=(BigInt(Math.random()*2**32>>>0)<<32n)|BigInt(Math.random()*2**32>>>0);
+  $('seed').value=BigInt.asIntN(64,r).toString(); load();
+};
+load(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>
